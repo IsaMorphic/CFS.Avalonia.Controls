@@ -1,7 +1,8 @@
 ﻿/* Based on Image.cs from the Avalonia project.
  * 
  * The MIT License (MIT)
- * Copyright (c) AvaloniaUI OÜ All Rights Reserved
+ * Copyright (c) AvaloniaUI OÜ All Rights Reserved, 
+ * portions copyright (c) Chosen Few Software
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy of 
  * this software and associated documentation files (the "Software"), to deal in the 
