@@ -266,7 +266,7 @@ namespace CFS.Avalonia.Controls
                 oldValue?.Dispose();
 
                 sourceImage?.Dispose();
-                sourceImage = newValue?.CloneAs<Rgba32>();
+                sourceImage = newValue?.CloneAs<Rgba32>(configuration);
 
                 targetBitmap?.Dispose();
                 targetBitmap = sourceImage is null ? null : new WriteableBitmap(
