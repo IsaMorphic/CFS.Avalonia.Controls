@@ -263,7 +263,6 @@ namespace CFS.Avalonia.Controls
             {
                 (oldValue, newValue) = change.GetOldAndNewValue
                     <SixLabors.ImageSharp.Image?>();
-                oldValue?.Dispose();
 
                 sourceImage?.Dispose();
                 sourceImage = newValue?.CloneAs<Rgba32>(configuration);
