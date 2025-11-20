@@ -32,11 +32,10 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Metadata;
 using Avalonia.Platform;
-
-using CFS.Avalonia.Controls.Extensions;
-
 using SixLabors.ImageSharp.PixelFormats;
 using System.Buffers;
+
+using CFS.Avalonia.Controls.Extensions;
 
 namespace CFS.Avalonia.Controls
 {
@@ -45,6 +44,8 @@ namespace CFS.Avalonia.Controls
     /// </summary>
     public class Image : Control
     {
+        private static readonly SixLabors.ImageSharp.Configuration configuration;
+
         /// <summary>
         /// Defines the <see cref="Source"/> property.
         /// </summary>
@@ -79,6 +80,9 @@ namespace CFS.Avalonia.Controls
 
         static Image()
         {
+            configuration = SixLabors.ImageSharp.Configuration.Default.Clone();
+            configuration.PreferContiguousImageBuffers = true;
+
             AffectsRender<Image>(SourceProperty, IterationCountProperty, StretchProperty, StretchDirectionProperty, BlendModeProperty);
             AffectsMeasure<Image>(SourceProperty, StretchProperty, StretchDirectionProperty);
             AutomationProperties.ControlTypeOverrideProperty.OverrideDefaultValue<Image>(AutomationControlType.Image);
@@ -86,11 +90,13 @@ namespace CFS.Avalonia.Controls
 
         // Essential bitmap state
 
-        private SixLabors.ImageSharp.Image<Bgra32>? sourceImage;
+        private SixLabors.ImageSharp.Image<Rgba32>? sourceImage;
+
+        private WriteableBitmap? targetBitmap;
 
         // Animated bitmap state
 
-        private SixLabors.ImageSharp.ImageFrame<Bgra32>? currentFrame;
+        private SixLabors.ImageSharp.ImageFrame<Rgba32>? currentFrame;
 
         private TimeSpan? animationStart;
 
@@ -155,13 +161,13 @@ namespace CFS.Avalonia.Controls
             }
         }
 
-        private SixLabors.ImageSharp.ImageFrame<Bgra32>? GetCurrentFrame(TimeSpan elapsed)
+        private SixLabors.ImageSharp.ImageFrame<Rgba32>? GetCurrentFrame(TimeSpan elapsed)
         {
             IEnumerable<TimeSpan> frameTimes = Source?.Frames?.GetCumulativeFrameDelays() ?? [];
             TimeSpan duration = frameTimes.LastOrDefault();
             if (duration > TimeSpan.Zero && (IterationCount.IsInfinite || (elapsed - animationStart) / duration < IterationCount.Value))
             {
-                return ((IEnumerable<SixLabors.ImageSharp.ImageFrame<Bgra32>>?)sourceImage?.Frames)?.Zip(frameTimes)
+                return ((IEnumerable<SixLabors.ImageSharp.ImageFrame<Rgba32>>?)sourceImage?.Frames)?.Zip(frameTimes)
                     .FirstOrDefault(x => (elapsed - animationStart)?.Ticks % duration.Ticks < x.Second.Ticks)
                     .First;
             }
@@ -177,11 +183,10 @@ namespace CFS.Avalonia.Controls
         /// <param name="context">The drawing context.</param>
         public unsafe sealed override void Render(DrawingContext context)
         {
-            if (currentFrame is not null && Bounds.Size is { Width: > 0, Height: > 0 })
+            if (targetBitmap is not null && Bounds.Size is { Width: > 0, Height: > 0 })
             {
                 Rect viewPort = new Rect(Bounds.Size);
-                Size sourceSize = new PixelSize(currentFrame.Width, currentFrame.Height)
-                    .ToSizeWithDpi(new Vector(96, 96));
+                Size sourceSize = targetBitmap.Size;
 
                 Vector scale = Stretch.CalculateScaling(Bounds.Size, sourceSize, StretchDirection);
                 Size scaledSize = sourceSize * scale;
@@ -191,17 +196,24 @@ namespace CFS.Avalonia.Controls
                 Rect sourceRect = new Rect(sourceSize)
                     .CenterRect(new Rect(destRect.Size / scale));
 
-                if (currentFrame.DangerousTryGetSinglePixelMemory(out Memory<Bgra32> currentFrameBuffer))
+                if (currentFrame?.DangerousTryGetSinglePixelMemory(out Memory<Rgba32> currentFrameBuffer) == true)
                 {
-                    using (MemoryHandle handle = currentFrameBuffer.Pin())
-                    using (Bitmap bitmap = new Bitmap(
-                        PixelFormat.Bgra8888, AlphaFormat.Unpremul, (nint)handle.Pointer, 
-                        new PixelSize(currentFrame.Width, currentFrame.Height), new Vector(96, 96), 
-                        currentFrame.Width * sizeof(Bgra32)))
-                    using (context.PushRenderOptions(new RenderOptions { BitmapBlendingMode = BlendMode }))
+                    using (MemoryHandle sourceBufferHandle = currentFrameBuffer.Pin())
+                    using (ILockedFramebuffer targetBufferHandle = targetBitmap.Lock())
                     {
-                        context.DrawImage(bitmap, sourceRect, destRect);
+                        void* sourcePointer = sourceBufferHandle.Pointer;
+                        long sourceLength = (long)currentFrameBuffer.Length * sizeof(Rgba32);
+
+                        void* targetPointer = (void*)targetBufferHandle.Address;
+                        long targetLength = (long)targetBufferHandle.RowBytes * targetBufferHandle.Size.Height;
+
+                        Buffer.MemoryCopy(sourcePointer, targetPointer, targetLength, sourceLength);
                     }
+                }
+
+                using (context.PushRenderOptions(new RenderOptions { BitmapBlendingMode = BlendMode }))
+                {
+                    context.DrawImage(targetBitmap, sourceRect, destRect);
                 }
             }
 
@@ -218,10 +230,9 @@ namespace CFS.Avalonia.Controls
         {
             var result = new Size();
 
-            if (currentFrame is not null)
+            if (targetBitmap is not null)
             {
-                Size sourceSize = new PixelSize(currentFrame.Width, currentFrame.Height)
-                    .ToSizeWithDpi(new Vector(96, 96));
+                Size sourceSize = targetBitmap.Size;
                 result = Stretch.CalculateSize(availableSize, sourceSize, StretchDirection);
             }
 
@@ -231,10 +242,9 @@ namespace CFS.Avalonia.Controls
         /// <inheritdoc/>
         protected override Size ArrangeOverride(Size finalSize)
         {
-            if (currentFrame is not null)
+            if (targetBitmap is not null)
             {
-                Size sourceSize = new PixelSize(currentFrame.Width, currentFrame.Height)
-                    .ToSizeWithDpi(new Vector(96, 96));
+                Size sourceSize = targetBitmap.Size;
                 var result = Stretch.CalculateSize(finalSize, sourceSize);
                 return result;
             }
@@ -248,19 +258,28 @@ namespace CFS.Avalonia.Controls
         {
             base.OnPropertyChanged(change);
 
-            var source = Source;
-
-            if (source is not null && change.Property == SourceProperty)
+            SixLabors.ImageSharp.Image? oldValue, newValue;
+            if (change.Property == SourceProperty)
             {
-                ((IDisposable?)change.OldValue)?.Dispose();
+                (oldValue, newValue) = change.GetOldAndNewValue
+                    <SixLabors.ImageSharp.Image?>();
+                oldValue?.Dispose();
 
                 sourceImage?.Dispose();
-                sourceImage = source as SixLabors.ImageSharp.Image<Bgra32> ?? source.CloneAs<Bgra32>();
+                sourceImage = newValue?.CloneAs<Rgba32>();
 
-                currentFrame = GetCurrentFrame(TimeSpan.Zero) ?? sourceImage.Frames.RootFrame;
+                targetBitmap?.Dispose();
+                targetBitmap = sourceImage is null ? null : new WriteableBitmap(
+                    new PixelSize(sourceImage.Width, sourceImage.Height), 
+                    new Vector(96, 96), 
+                    PixelFormat.Rgba8888, 
+                    AlphaFormat.Unpremul
+                    );
+
+                currentFrame = sourceImage?.Frames.RootFrame;
             }
 
-            if (change.Property == IterationCountProperty || change.Property == SourceProperty)
+            if (change.Property == SourceProperty || change.Property == IterationCountProperty)
             {
                 animationStart = null;
             }
