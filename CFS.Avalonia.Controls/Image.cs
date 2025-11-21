@@ -140,7 +140,7 @@ namespace CFS.Avalonia.Controls
         /// <summary>
         /// Determines how many times the animation (if any) repeats before stopping.
         /// </summary>
-        public IterationCount IterationCount 
+        public IterationCount IterationCount
         {
             get => GetValue(IterationCountProperty);
             set => SetValue(IterationCountProperty, value);
@@ -181,7 +181,7 @@ namespace CFS.Avalonia.Controls
         /// Renders the control.
         /// </summary>
         /// <param name="context">The drawing context.</param>
-        public unsafe sealed override void Render(DrawingContext context)
+        public sealed override void Render(DrawingContext context)
         {
             if (targetBitmap is not null && Bounds.Size is { Width: > 0, Height: > 0 })
             {
@@ -198,13 +198,15 @@ namespace CFS.Avalonia.Controls
 
                 if (currentFrame?.DangerousTryGetSinglePixelMemory(out Memory<Rgba32> currentFrameBuffer) == true)
                 {
-                    using (MemoryHandle sourceBufferHandle = currentFrameBuffer.Pin())
-                    using (ILockedFramebuffer targetBufferHandle = targetBitmap.Lock())
+                    using MemoryHandle sourceBufferHandle = currentFrameBuffer.Pin();
+                    using ILockedFramebuffer targetBufferHandle = targetBitmap.Lock();
+
+                    unsafe
                     {
                         void* sourcePointer = sourceBufferHandle.Pointer;
                         long sourceLength = (long)currentFrameBuffer.Length * sizeof(Rgba32);
 
-                        void* targetPointer = (void*)targetBufferHandle.Address;
+                        void* targetPointer = targetBufferHandle.Address.ToPointer();
                         long targetLength = (long)targetBufferHandle.RowBytes * targetBufferHandle.Size.Height;
 
                         Buffer.MemoryCopy(sourcePointer, targetPointer, targetLength, sourceLength);
@@ -269,9 +271,9 @@ namespace CFS.Avalonia.Controls
 
                 targetBitmap?.Dispose();
                 targetBitmap = sourceImage is null ? null : new WriteableBitmap(
-                    new PixelSize(sourceImage.Width, sourceImage.Height), 
-                    new Vector(96, 96), 
-                    PixelFormat.Rgba8888, 
+                    new PixelSize(sourceImage.Width, sourceImage.Height),
+                    new Vector(96, 96),
+                    PixelFormat.Rgba8888,
                     AlphaFormat.Unpremul
                     );
 
