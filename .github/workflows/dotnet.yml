@@ -23,4 +23,4 @@ jobs:
     - name: Restore all dependencies
       run: dotnet restore
     - name: Build CFS.Avalonia.Controls
-      run: dotnet build CFS.Avalonia.Controls --no-restore --framework net10.0
+      run: dotnet build CFS.Avalonia.Controls --no-restore
